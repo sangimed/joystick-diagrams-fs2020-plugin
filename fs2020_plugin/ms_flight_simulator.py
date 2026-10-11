@@ -1,4 +1,5 @@
 import logging
+import re
 import xml.etree.ElementTree as eT
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,13 @@ AXIS_TO_AXIS_TYPES = {
     "L-Axis Y": Axis(AxisDirection.Y),
     "R-Axis Z-": Axis(AxisDirection.RZ),
     "R-Axis Z+": Axis(AxisDirection.RZ),
+    "Axis X": Axis(AxisDirection.X),
+    "Axis Y": Axis(AxisDirection.Y),
+    "Axis Z": Axis(getattr(AxisDirection, "Z", AxisDirection.RZ)),
+    "Rotation X": Axis(AxisDirection.RX),
+    "Rotation Y": Axis(getattr(AxisDirection, "RY", AxisDirection.RX)),
+    "Rotation Z": Axis(AxisDirection.RZ),
+    "Slider X": Axis(getattr(AxisDirection, "SLIDER", AxisDirection.X)),
 }
 
 HAT_DIR_TO_DIR = {
@@ -61,14 +69,17 @@ class FS2020Parser:
 
 
 def process_xml_file(file: Path, profile_collection: ProfileCollection):
-    with open(file, "r") as f:
-        total_lines = f.readlines()
+    # Some FS2020 exports contain non-XML header lines. Prefer valid XML
+    # without stripping any lines (MSFS 2024 exports are valid as-is).
+    content = file.read_text(encoding="utf-8-sig")
+    try:
+        xml = eT.fromstring(content)
+    except eT.ParseError:
+        lines = content.splitlines(keepends=True)
+        xml = eT.fromstringlist([line for i, line in enumerate(lines) if i not in (1, 2)])
 
-        xml = eT.fromstringlist(
-            [line for count, line in enumerate(total_lines) if count not in [1, 2]]
-        )
-
-    process_device(xml, profile_collection)
+    for device in ([xml] if xml.tag == "Device" else xml.findall(".//Device")):
+        process_device(device, profile_collection)
 
 
 def process_device(device_xml: eT.Element, collection: ProfileCollection):
@@ -142,7 +153,7 @@ def process_contexts(contexts: list[eT.Element]) -> list["Control"]:
             if primary_action_keys:
                 control, modifiers = process_action_keys(primary_action_keys)
 
-                if control and modifiers is None:
+                if control is None:
                     continue
 
                 controls.append(Control(action_name, control, modifiers))
@@ -171,29 +182,22 @@ def process_action_keys(keys: list[eT.Element]) -> tuple:
 
 
 def parse_joystick_bind_information(bind_information: str | None):
-    """Process the particular bind key from information block.
-
-    The data here is inconsistent from FS2020, so proceeding cautiously"""
-    if bind_information is None:
+    """Convert FS2020 or MSFS2024 KEY Information into a host input."""
+    if not bind_information:
         return None
     data = bind_information.replace("Joystick", "").strip()
-
-    parts = data.split(" ")
-
-    if len(parts) != 2:
-        print("Error with expected parts")
-
-    match parts[0]:
-        case "Button":
-            return Button(int(parts[1]))
-        case "Pov":
-            return Hat(1, HAT_DIR_TO_DIR[parts[1]])
-        case "L-Axis":
-            return AXIS_TO_AXIS_TYPES[data]
-        case "R-Axis":
-            return AXIS_TO_AXIS_TYPES[data]
-        case _:
-            print(f"Unexpected control type {parts[1]}")
+    match = re.fullmatch(r"Button\\s*(\\d+)", data, re.IGNORECASE)
+    if match:
+        return Button(int(match.group(1)))
+    match = re.fullmatch(r"Pov\\s*(?:([0-9]+)\\s*)?(Up_Right|Down_Right|Down_Left|Up_Left|Up|Right|Down|Left)", data, re.IGNORECASE)
+    if match:
+        direction = next((v for k, v in HAT_DIR_TO_DIR.items() if k.lower() == match.group(2).lower()), None)
+        return Hat(int(match.group(1) or 1), direction) if direction else None
+    axis = AXIS_TO_AXIS_TYPES.get(data)
+    if axis is not None:
+        return axis
+    _logger.warning("Unsupported joystick input: %s", bind_information)
+    return None
 
 
 def split_action_name(name_key: str):
@@ -215,12 +219,16 @@ def file_check(file):
 def check_folders(folders):
     valid_files = []
     for folder in folders:
+        if folder.is_file():
+            if folder.suffix.lower() == ".xml" and file_check(folder):
+                valid_files.append(folder)
+            continue
         if not folder.is_dir():
             continue
-
-        for file in folder.iterdir():
+        for file in folder.rglob("*.xml"):
             _logger.debug(f"Processing file {file}")
-            valid_files.append(file) if file_check(file) else None
+            if file_check(file):
+                valid_files.append(file)
 
     return valid_files
 
