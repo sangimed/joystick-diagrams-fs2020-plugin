@@ -13,7 +13,7 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://www.joystick-diagrams.com"
-Repository = "https://github.com/sangimed/joystick-diagrams-fs2020-plugin"
+Repository = "https://github.com/Rexeh/joystick-diagrams-fs2020-plugin"
 Host = "https://github.com/Rexeh/joystick-diagrams"
 
 [project.optional-dependencies]
