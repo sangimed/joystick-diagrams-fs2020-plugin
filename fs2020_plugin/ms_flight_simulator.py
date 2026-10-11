@@ -130,6 +130,15 @@ def _merge_action(existing_command: str, action: str) -> str:
     return f"{existing_command} | {action}"
 
 
+def _add_modifier_action(existing_input, modifier_ids: set[str], action: str) -> None:
+    for modifier in existing_input.modifiers:
+        if modifier.modifiers == modifier_ids:
+            modifier.command = _merge_action(modifier.command, action)
+            return
+
+    existing_input.add_modifier(modifier_ids, action)
+
+
 def process_device(device_xml: eT.Element, collection: ProfileCollection):
     device_name = device_xml.get("DeviceName")
     device_guid = device_xml.get("GUID")
@@ -154,16 +163,16 @@ def process_device(device_xml: eT.Element, collection: ProfileCollection):
             existing_input.command = _merge_action(existing_input.command, control.action)
             continue
 
-        if existing_input and control.modifiers:
-            existing_input.add_modifier(
-                {modifier.identifier for modifier in control.modifiers}, control.action
-            )
-        elif control.modifiers:
-            dev.add_modifier_to_input(
-                control.base_control,
-                {modifier.identifier for modifier in control.modifiers},
-                control.action,
-            )
+        if control.modifiers:
+            modifier_ids = {modifier.identifier for modifier in control.modifiers}
+            if existing_input:
+                _add_modifier_action(existing_input, modifier_ids, control.action)
+            else:
+                dev.add_modifier_to_input(
+                    control.base_control,
+                    modifier_ids,
+                    control.action,
+                )
         else:
             dev.create_input(control.base_control, control.action)
 
