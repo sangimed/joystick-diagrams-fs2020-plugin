@@ -2,17 +2,20 @@
 from fs2020_plugin.ms_flight_simulator import (
     FS2020Parser,
     parse_joystick_bind_information,
-    process_xml_file,
 )
-from joystick_diagrams.input.profile_collection import ProfileCollection
+from joystick_diagrams.input.axis import Axis, AxisDirection, AxisSlider
+from joystick_diagrams.input.button import Button
 
 
 def test_2024_inputs():
-    assert parse_joystick_bind_information("Button10") is not None
-    assert parse_joystick_bind_information("Axis X") is not None
-    assert parse_joystick_bind_information("Axis Z") is not None
-    assert parse_joystick_bind_information("Rotation Z") is not None
-    assert parse_joystick_bind_information("Slider X") is not None
+    assert parse_joystick_bind_information("Button10") == Button(10)
+    assert parse_joystick_bind_information("Joystick Button 9") == Button(9)
+    assert parse_joystick_bind_information("Axis X") == Axis(AxisDirection.X)
+    assert parse_joystick_bind_information("Axis Z") == Axis(AxisDirection.Z)
+    assert parse_joystick_bind_information("Rotation Y") == Axis(AxisDirection.RY)
+    assert parse_joystick_bind_information("Rotation Z") == Axis(AxisDirection.RZ)
+    assert parse_joystick_bind_information("Slider X") == AxisSlider(1)
+    assert parse_joystick_bind_information("Slider Y") == AxisSlider(2)
     assert parse_joystick_bind_information("unknown input") is None
 
 
@@ -33,7 +36,9 @@ def test_2024_device_and_multiple_actions(tmp_path):
     file = folder / "Saitek_X52_Pro_2024_Planes.xml"
     file.write_text(xml, encoding="utf-8")
     collection = FS2020Parser(tmp_path).run()
-    assert collection.get_profile("Default") is not None
+    profile = collection.get_profile("Default")
+    assert profile is not None
+    assert len(profile.devices) == 1
 
 
 def test_direct_xml_file_in_selected_folder(tmp_path):

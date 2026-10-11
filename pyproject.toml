@@ -1,7 +1,7 @@
 [project]
 name = "joystick-diagrams-fs2020-plugin"
-version = "0.0.1"
-description = "Flight Simulator 2020 parser plugin for Joystick Diagrams"
+version = "0.1.0"
+description = "Flight Simulator 2020 and 2024 parser plugin for Joystick Diagrams"
 readme = "README.md"
 requires-python = ">=3.11, <3.13"
 authors = [{ name = "Robert Cox" }]
@@ -13,7 +13,7 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://www.joystick-diagrams.com"
-Repository = "https://github.com/Rexeh/joystick-diagrams-fs2020-plugin"
+Repository = "https://github.com/sangimed/joystick-diagrams-fs2020-plugin"
 Host = "https://github.com/Rexeh/joystick-diagrams"
 
 [project.optional-dependencies]
