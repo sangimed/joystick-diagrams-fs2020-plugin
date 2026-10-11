@@ -54,7 +54,6 @@ HAT_DIR_TO_DIR = {
 }
 
 _HAT_DIR_LOOKUP = {key.casefold(): value for key, value in HAT_DIR_TO_DIR.items()}
-
 default_profile_name = "Default"
 
 
@@ -107,8 +106,8 @@ def _parse_xml_content(content: str) -> eT.Element:
         )
         try:
             return eT.fromstring(f"<ProfileRoot>{without_declaration}</ProfileRoot>")
-        except eT.ParseError:
-            raise original_error
+        except eT.ParseError as wrapped_error:
+            raise original_error from wrapped_error
 
 
 def process_xml_file(file: Path, profile_collection: ProfileCollection):
