@@ -4,7 +4,7 @@ import xml.etree.ElementTree as eT
 from dataclasses import dataclass
 from pathlib import Path
 
-from joystick_diagrams.input.axis import Axis, AxisDirection
+from joystick_diagrams.input.axis import Axis, AxisDirection, AxisSlider
 from joystick_diagrams.input.button import Button
 from joystick_diagrams.input.hat import Hat, HatDirection
 from joystick_diagrams.input.profile_collection import ProfileCollection
@@ -20,11 +20,12 @@ AXIS_TO_AXIS_TYPES = {
     "R-Axis Z+": Axis(AxisDirection.RZ),
     "Axis X": Axis(AxisDirection.X),
     "Axis Y": Axis(AxisDirection.Y),
-    "Axis Z": Axis(getattr(AxisDirection, "Z", AxisDirection.RZ)),
+    "Axis Z": Axis(AxisDirection.Z),
     "Rotation X": Axis(AxisDirection.RX),
-    "Rotation Y": Axis(getattr(AxisDirection, "RY", AxisDirection.RX)),
+    "Rotation Y": Axis(AxisDirection.RY),
     "Rotation Z": Axis(AxisDirection.RZ),
-    "Slider X": Axis(getattr(AxisDirection, "SLIDER", AxisDirection.X)),
+    "Slider X": AxisSlider(1),
+    "Slider Y": AxisSlider(2),
 }
 
 HAT_DIR_TO_DIR = {
@@ -60,7 +61,10 @@ class FS2020Parser:
 
         for xml in xml_files:
             _logger.debug(f"Processing {xml}")
-            process_xml_file(xml, pc)
+            try:
+                process_xml_file(xml, pc)
+            except (OSError, eT.ParseError, ValueError, KeyError) as exc:
+                _logger.warning("Skipping invalid input profile %s: %s", xml, exc)
 
         return pc
 
@@ -167,11 +171,14 @@ def process_action_keys(keys: list[eT.Element]) -> tuple:
 
     if len(keys) == 1:
         ctrl = parse_joystick_bind_information(keys[0].get("Information"))
-        return (ctrl, {})
+        return (ctrl, [])
     else:
         controls = list()
         for key in keys:
-            controls.append(parse_joystick_bind_information(key.get("Information")))
+            parsed = parse_joystick_bind_information(key.get("Information"))
+            if parsed is None:
+                return (None, None)
+            controls.append(parsed)
 
         if controls:
             main_control = controls.pop(0)
@@ -236,8 +243,8 @@ def check_folders(folders):
 @dataclass
 class Control:
     action: str
-    base_control: Button | Axis | Hat
-    modifiers: list[Button | Axis | Hat]
+    base_control: Button | Axis | AxisSlider | Hat
+    modifiers: list[Button | Axis | AxisSlider | Hat]
 
     def __repr__(self):
         return f"{self.action} | {self.base_control} | {id(self.base_control)}"
