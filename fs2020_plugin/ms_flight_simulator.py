@@ -1,9 +1,10 @@
 import logging
+import re
 import xml.etree.ElementTree as eT
 from dataclasses import dataclass
 from pathlib import Path
 
-from joystick_diagrams.input.axis import Axis, AxisDirection
+from joystick_diagrams.input.axis import Axis, AxisDirection, AxisSlider
 from joystick_diagrams.input.button import Button
 from joystick_diagrams.input.hat import Hat, HatDirection
 from joystick_diagrams.input.profile_collection import ProfileCollection
@@ -11,12 +12,17 @@ from joystick_diagrams.input.profile_collection import ProfileCollection
 _logger = logging.getLogger(__name__)
 
 AXIS_TO_AXIS_TYPES = {
-    "R-Axis X-": Axis(AxisDirection.RX),
-    "R-Axis X+": Axis(AxisDirection.RX),
     "L-Axis X": Axis(AxisDirection.X),
     "L-Axis Y": Axis(AxisDirection.Y),
-    "R-Axis Z-": Axis(AxisDirection.RZ),
-    "R-Axis Z+": Axis(AxisDirection.RZ),
+    "L-Axis Z": Axis(AxisDirection.Z),
+    "R-Axis X": Axis(AxisDirection.RX),
+    "R-Axis Y": Axis(AxisDirection.RY),
+    "R-Axis Z": Axis(AxisDirection.RZ),
+}
+
+SLIDER_TO_AXIS_TYPES = {
+    "Slider X": AxisSlider(0),
+    "Slider Y": AxisSlider(1),
 }
 
 HAT_DIR_TO_DIR = {
@@ -30,6 +36,7 @@ HAT_DIR_TO_DIR = {
     "Up_Left": HatDirection.UL,
 }
 
+XML_DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>", re.IGNORECASE)
 default_profile_name = "Default"
 
 
@@ -61,14 +68,44 @@ class FS2020Parser:
 
 
 def process_xml_file(file: Path, profile_collection: ProfileCollection):
-    with open(file, "r") as f:
-        total_lines = f.readlines()
+    try:
+        content = file.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        _logger.warning("Unable to decode Flight Simulator profile %s", file)
+        return
 
-        xml = eT.fromstringlist(
-            [line for count, line in enumerate(total_lines) if count not in [1, 2]]
-        )
+    device_xml = parse_device_xml(content)
+    if device_xml is None:
+        _logger.warning("No Device element found in Flight Simulator profile %s", file)
+        return
 
-    process_device(xml, profile_collection)
+    process_device(device_xml, profile_collection)
+
+
+def parse_device_xml(content: str) -> eT.Element | None:
+    """Return the Device node from an FS2020 or MSFS 2024 profile export.
+
+    Flight Simulator profile files are often XML fragments rather than strictly valid XML:
+    Version, FriendlyName and Device can all exist as top-level siblings. Wrapping the fragment
+    lets ElementTree parse both those exports and regular XML documents.
+    """
+    content = XML_DECLARATION_RE.sub("", content, count=1).strip()
+    if not content:
+        return None
+
+    try:
+        root = eT.fromstring(content)
+    except eT.ParseError:
+        try:
+            root = eT.fromstring(f"<Profile>{content}</Profile>")
+        except eT.ParseError as exc:
+            _logger.warning("Unable to parse Flight Simulator XML: %s", exc)
+            return None
+
+    if root.tag == "Device":
+        return root
+
+    return root.find(".//Device")
 
 
 def process_device(device_xml: eT.Element, collection: ProfileCollection):
@@ -90,12 +127,10 @@ def process_device(device_xml: eT.Element, collection: ProfileCollection):
     controls = process_contexts(contexts)
 
     for control in controls:
-        # Check if we have an existing input for the device
         existing_input = dev.get_input(
             dev.resolve_type(control.base_control), control.base_control.identifier
         )
 
-        # Update the command to prevent overwrite
         if existing_input and not control.modifiers:
             if existing_input.command:
                 existing_input.command = f"{existing_input.command} | {control.action}"
@@ -103,7 +138,6 @@ def process_device(device_xml: eT.Element, collection: ProfileCollection):
                 existing_input.command = f"{control.action}"
             continue
 
-        # Handle modifiers being added to existing controls (where we have overlapping base)
         if existing_input and control.modifiers:
             existing_input.add_modifier(
                 {x.identifier for x in control.modifiers}, control.action
@@ -121,11 +155,8 @@ def process_device(device_xml: eT.Element, collection: ProfileCollection):
 def process_contexts(contexts: list[eT.Element]) -> list["Control"]:
     controls = []
     for context in contexts:
-        # context_name = context.get("ContextName")
-
         actions = context.findall("Action")
 
-        # Multiple contexts can be linked, i.e. X- and X+ are just X
         for action in actions:
             action_name_raw = action.get("ActionName")
             if action_name_raw is None:
@@ -133,16 +164,17 @@ def process_contexts(contexts: list[eT.Element]) -> list["Control"]:
 
             action_name = split_action_name(action_name_raw)
 
-            primary = action.find("Primary")
-            if primary is None:
-                continue
+            for binding_name in ("Primary", "Secondary"):
+                binding = action.find(binding_name)
+                if binding is None:
+                    continue
 
-            primary_action_keys = primary.findall("KEY")
+                action_keys = binding.findall("KEY")
+                if not action_keys:
+                    continue
 
-            if primary_action_keys:
-                control, modifiers = process_action_keys(primary_action_keys)
-
-                if control and modifiers is None:
+                control, modifiers = process_action_keys(action_keys)
+                if control is None or modifiers is None:
                     continue
 
                 controls.append(Control(action_name, control, modifiers))
@@ -154,46 +186,49 @@ def process_action_keys(keys: list[eT.Element]) -> tuple:
     if not keys:
         return (None, None)
 
-    if len(keys) == 1:
-        ctrl = parse_joystick_bind_information(keys[0].get("Information"))
-        return (ctrl, {})
-    else:
-        controls = list()
-        for key in keys:
-            controls.append(parse_joystick_bind_information(key.get("Information")))
-
-        if controls:
-            main_control = controls.pop(0)
-
-            return (main_control, controls)
-
+    main_control = parse_joystick_bind_information(keys[0].get("Information"))
+    if main_control is None:
         return (None, None)
+
+    modifiers = []
+    for key in keys[1:]:
+        modifier = parse_joystick_bind_information(key.get("Information"))
+        if modifier is None:
+            return (None, None)
+        modifiers.append(modifier)
+
+    return (main_control, modifiers)
 
 
 def parse_joystick_bind_information(bind_information: str | None):
-    """Process the particular bind key from information block.
-
-    The data here is inconsistent from FS2020, so proceeding cautiously"""
+    """Convert an FS2020/MSFS 2024 KEY Information value into an input control."""
     if bind_information is None:
         return None
-    data = bind_information.replace("Joystick", "").strip()
 
-    parts = data.split(" ")
+    data = bind_information.replace("Joystick", "", 1).strip()
+    data = " ".join(data.split())
 
-    if len(parts) != 2:
-        print("Error with expected parts")
+    if data.startswith("Button "):
+        try:
+            return Button(int(data.removeprefix("Button ")))
+        except ValueError:
+            _logger.debug("Invalid joystick button binding: %s", bind_information)
+            return None
 
-    match parts[0]:
-        case "Button":
-            return Button(int(parts[1]))
-        case "Pov":
-            return Hat(1, HAT_DIR_TO_DIR[parts[1]])
-        case "L-Axis":
-            return AXIS_TO_AXIS_TYPES[data]
-        case "R-Axis":
-            return AXIS_TO_AXIS_TYPES[data]
-        case _:
-            print(f"Unexpected control type {parts[1]}")
+    if data.startswith("Pov "):
+        direction_name = re.sub(r"[\s-]+", "_", data.removeprefix("Pov ").strip())
+        direction = HAT_DIR_TO_DIR.get(direction_name)
+        return Hat(1, direction) if direction is not None else None
+
+    axis_name = data.rstrip("+-").strip()
+    if axis_name in AXIS_TO_AXIS_TYPES:
+        return AXIS_TO_AXIS_TYPES[axis_name]
+
+    if axis_name in SLIDER_TO_AXIS_TYPES:
+        return SLIDER_TO_AXIS_TYPES[axis_name]
+
+    _logger.debug("Unexpected control type: %s", bind_information)
+    return None
 
 
 def split_action_name(name_key: str):
@@ -206,21 +241,26 @@ def file_check(file):
 
     _logger.debug(f"File access: {os.stat(file).st_mode}")
     with open(file, "rb") as b:
-        _logger.debug("File opened")
-        if b.read(5) == b"<?xml":
-            return True
-    return False
+        header = b.read(256).lstrip(b"\xef\xbb\xbf").lstrip()
+        return header.startswith((b"<?xml", b"<Version", b"<Device"))
 
 
 def check_folders(folders):
+    """Find profile files in both FS2020 WGS folders and MSFS 2024 export folders."""
     valid_files = []
-    for folder in folders:
-        if not folder.is_dir():
+    for path in folders:
+        if path.is_file():
+            if file_check(path):
+                valid_files.append(path)
             continue
 
-        for file in folder.iterdir():
+        if not path.is_dir():
+            continue
+
+        for file in path.iterdir():
             _logger.debug(f"Processing file {file}")
-            valid_files.append(file) if file_check(file) else None
+            if file.is_file() and file_check(file):
+                valid_files.append(file)
 
     return valid_files
 
@@ -228,8 +268,8 @@ def check_folders(folders):
 @dataclass
 class Control:
     action: str
-    base_control: Button | Axis | Hat
-    modifiers: list[Button | Axis | Hat]
+    base_control: Button | Axis | AxisSlider | Hat
+    modifiers: list[Button | Axis | AxisSlider | Hat]
 
     def __repr__(self):
         return f"{self.action} | {self.base_control} | {id(self.base_control)}"
