@@ -193,10 +193,10 @@ def parse_joystick_bind_information(bind_information: str | None):
     if not bind_information:
         return None
     data = bind_information.replace("Joystick", "").strip()
-    match = re.fullmatch(r"Button\\s*(\\d+)", data, re.IGNORECASE)
+    match = re.fullmatch(r"Button\s*(\d+)", data, re.IGNORECASE)
     if match:
         return Button(int(match.group(1)))
-    match = re.fullmatch(r"Pov\\s*(?:([0-9]+)\\s*)?(Up_Right|Down_Right|Down_Left|Up_Left|Up|Right|Down|Left)", data, re.IGNORECASE)
+    match = re.fullmatch(r"Pov\s*(?:([0-9]+)\s*)?(Up_Right|Down_Right|Down_Left|Up_Left|Up|Right|Down|Left)", data, re.IGNORECASE)
     if match:
         direction = next((v for k, v in HAT_DIR_TO_DIR.items() if k.lower() == match.group(2).lower()), None)
         return Hat(int(match.group(1) or 1), direction) if direction else None
