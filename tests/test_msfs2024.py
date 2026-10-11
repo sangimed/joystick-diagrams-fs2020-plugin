@@ -70,6 +70,12 @@ def test_official_2024_wrapper_primary_secondary_and_modifiers(tmp_path):
           <KEY Information="Button5">4</KEY>
         </Primary>
       </Action>
+      <Action ActionName="KEY_SKYDIVE_DOORLIGHTS_INC">
+        <Primary>
+          <KEY Information="Button6">5</KEY>
+          <KEY Information="Button5">4</KEY>
+        </Primary>
+      </Action>
     </Context>
   </Device>
 </DefaulftInput>
@@ -88,7 +94,10 @@ def test_official_2024_wrapper_primary_secondary_and_modifiers(tmp_path):
     assert modifier_input.command == ""
     assert len(modifier_input.modifiers) == 1
     assert modifier_input.modifiers[0].modifiers == {"BUTTON_5"}
-    assert modifier_input.modifiers[0].command == "Lead Pole Toggle"
+    assert (
+        modifier_input.modifiers[0].command
+        == "Lead Pole Toggle | Skydive Doorlights Inc"
+    )
 
 
 def test_custom_2024_fragment_export(tmp_path):
