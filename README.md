@@ -1,14 +1,14 @@
-# Joystick Diagrams — Flight Simulator 2020 Plugin
+# Joystick Diagrams — Flight Simulator 2020 / 2024 Plugin
 
 Parser plugin for [Joystick Diagrams](https://github.com/Rexeh/joystick-diagrams) that reads
-Microsoft Flight Simulator 2020 keybind exports and turns them into device profiles the app can draw.
+Microsoft Flight Simulator 2020 and 2024 keybind XML files and turns them into device profiles the app can draw.
 
 This plugin is **not bundled** with the application. Install it from inside Joystick Diagrams via
 **Plugins → Store**, or point the installer at a release ZIP below.
 
 - **Plugin ID:** `a45f6e83-0460-4d05-86c6-ac4a5704361e`
 - **Type:** parser
-- **Current version:** 0.0.1
+- **Current version:** 0.1.0
 
 ## Repository layout
 
@@ -31,6 +31,24 @@ imports of `joystick_diagrams.input.*`, `...plugin_interface`, and `...plugin_se
 
 Installed plugins cannot ship their own PyPI dependencies — they run inside the host's frozen
 environment. This plugin needs only the host SDK and the Python standard library.
+
+## MSFS 2024 setup
+
+In **Plugins → Flight Simulator 2020 / 2024**, set the folder to the directory
+containing the simulator's XML input profiles. The parser searches that directory
+and nested folders for XML profiles. The default Steam-installed X52 Pro profile
+is typically under:
+
+`C:\\Program Files (x86)\\Steam\\steamapps\\common\\MSFS2024\\Packages\\asobo-input-profiles-pc\\InputProfiles\\Categories\\Airplane`
+
+**Important:** Files in the game installation are the official defaults. Your
+customized in-game assignments may be stored elsewhere; select the folder
+containing your customized XML files to document your actual mappings.
+
+MSFS 2024 supports `ButtonN`, `Axis X/Y/Z`, `Rotation X/Y/Z`,
+and `Slider X` input descriptions. Some device-specific controls and POV
+formats may need further mappings. Validate the generated button numbers
+against the physical device before relying on the diagram.
 
 ## Development
 
