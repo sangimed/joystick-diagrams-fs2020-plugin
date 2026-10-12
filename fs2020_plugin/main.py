@@ -12,7 +12,7 @@ from .ms_flight_simulator import FS2020Parser
 class FS2020Settings(PluginSettings):
     game_dir: Path | None = Field(
         default=None,
-        title="Flight Simulator 2020 Folder",
+        title="Flight Simulator 2020 / 2024 Profiles Folder",
         json_schema_extra={
             "is_folder": True,
             "default_path": "~/AppData",
@@ -23,8 +23,8 @@ class FS2020Settings(PluginSettings):
 class ParserPlugin(PluginInterface):
     plugin_meta = PluginMeta(
         id="a45f6e83-0460-4d05-86c6-ac4a5704361e",
-        name="Flight Simulator 2020",
-        version="0.0.1",
+        name="Flight Simulator 2020 / 2024",
+        version="0.1.0",
         icon_path="img/icon.png",
     )
     plugin_settings_model = FS2020Settings

@@ -1,9 +1,10 @@
 import logging
+import re
 import xml.etree.ElementTree as eT
 from dataclasses import dataclass
 from pathlib import Path
 
-from joystick_diagrams.input.axis import Axis, AxisDirection
+from joystick_diagrams.input.axis import Axis, AxisDirection, AxisSlider
 from joystick_diagrams.input.button import Button
 from joystick_diagrams.input.hat import Hat, HatDirection
 from joystick_diagrams.input.profile_collection import ProfileCollection
@@ -11,13 +12,35 @@ from joystick_diagrams.input.profile_collection import ProfileCollection
 _logger = logging.getLogger(__name__)
 
 AXIS_TO_AXIS_TYPES = {
+    "L-Axis X": Axis(AxisDirection.X),
+    "L-Axis X-": Axis(AxisDirection.X),
+    "L-Axis X+": Axis(AxisDirection.X),
+    "L-Axis Y": Axis(AxisDirection.Y),
+    "L-Axis Y-": Axis(AxisDirection.Y),
+    "L-Axis Y+": Axis(AxisDirection.Y),
+    "L-Axis Z": Axis(AxisDirection.Z),
+    "L-Axis Z-": Axis(AxisDirection.Z),
+    "L-Axis Z+": Axis(AxisDirection.Z),
+    "R-Axis X": Axis(AxisDirection.RX),
     "R-Axis X-": Axis(AxisDirection.RX),
     "R-Axis X+": Axis(AxisDirection.RX),
-    "L-Axis X": Axis(AxisDirection.X),
-    "L-Axis Y": Axis(AxisDirection.Y),
+    "R-Axis Y": Axis(AxisDirection.RY),
+    "R-Axis Y-": Axis(AxisDirection.RY),
+    "R-Axis Y+": Axis(AxisDirection.RY),
+    "R-Axis Z": Axis(AxisDirection.RZ),
     "R-Axis Z-": Axis(AxisDirection.RZ),
     "R-Axis Z+": Axis(AxisDirection.RZ),
+    "Axis X": Axis(AxisDirection.X),
+    "Axis Y": Axis(AxisDirection.Y),
+    "Axis Z": Axis(AxisDirection.Z),
+    "Rotation X": Axis(AxisDirection.RX),
+    "Rotation Y": Axis(AxisDirection.RY),
+    "Rotation Z": Axis(AxisDirection.RZ),
+    "Slider X": AxisSlider(1),
+    "Slider Y": AxisSlider(2),
 }
+
+_AXIS_LOOKUP = {key.casefold(): value for key, value in AXIS_TO_AXIS_TYPES.items()}
 
 HAT_DIR_TO_DIR = {
     "Up": HatDirection.U,
@@ -30,6 +53,7 @@ HAT_DIR_TO_DIR = {
     "Up_Left": HatDirection.UL,
 }
 
+_HAT_DIR_LOOKUP = {key.casefold(): value for key, value in HAT_DIR_TO_DIR.items()}
 default_profile_name = "Default"
 
 
@@ -39,20 +63,28 @@ class FS2020Parser:
         self.data = list()
 
     def run(self):
-        folders = self.folder_path.iterdir()
-
-        _logger.debug(f"Folders detected {folders}")
-
         pc = ProfileCollection()
         pc.create_profile(default_profile_name)
 
-        xml_files = check_folders(folders)
+        if not self.folder_path.exists():
+            _logger.warning("Profile path does not exist: %s", self.folder_path)
+            return pc
 
-        _logger.debug(f"XMLs detected {xml_files}")
+        entries = (
+            [self.folder_path]
+            if self.folder_path.is_file()
+            else self.folder_path.iterdir()
+        )
+        xml_files = check_folders(entries)
+
+        _logger.debug("XMLs detected %s", xml_files)
 
         for xml in xml_files:
-            _logger.debug(f"Processing {xml}")
-            process_xml_file(xml, pc)
+            _logger.debug("Processing %s", xml)
+            try:
+                process_xml_file(xml, pc)
+            except (OSError, eT.ParseError, ValueError, KeyError) as exc:
+                _logger.warning("Skipping invalid input profile %s: %s", xml, exc)
 
         return pc
 
@@ -60,15 +92,51 @@ class FS2020Parser:
         self.data.append(file)
 
 
-def process_xml_file(file: Path, profile_collection: ProfileCollection):
-    with open(file, "r") as f:
-        total_lines = f.readlines()
-
-        xml = eT.fromstringlist(
-            [line for count, line in enumerate(total_lines) if count not in [1, 2]]
+def _parse_xml_content(content: str) -> eT.Element:
+    """Parse both normal XML documents and MSFS multi-root profile exports."""
+    try:
+        return eT.fromstring(content)
+    except eT.ParseError as original_error:
+        without_declaration = re.sub(
+            r"^\s*<\?xml[^>]*\?>",
+            "",
+            content,
+            count=1,
+            flags=re.IGNORECASE,
         )
+        try:
+            return eT.fromstring(f"<ProfileRoot>{without_declaration}</ProfileRoot>")
+        except eT.ParseError as wrapped_error:
+            raise original_error from wrapped_error
 
-    process_device(xml, profile_collection)
+
+def process_xml_file(file: Path, profile_collection: ProfileCollection):
+    content = file.read_text(encoding="utf-8-sig")
+    xml = _parse_xml_content(content)
+
+    devices = [xml] if xml.tag == "Device" else xml.findall(".//Device")
+    for device in devices:
+        process_device(device, profile_collection)
+
+
+def _merge_action(existing_command: str, action: str) -> str:
+    if not existing_command:
+        return action
+
+    commands = [command.strip() for command in existing_command.split(" | ")]
+    if action in commands:
+        return existing_command
+
+    return f"{existing_command} | {action}"
+
+
+def _add_modifier_action(existing_input, modifier_ids: set[str], action: str) -> None:
+    for modifier in existing_input.modifiers:
+        if modifier.modifiers == modifier_ids:
+            modifier.command = _merge_action(modifier.command, action)
+            return
+
+    existing_input.add_modifier(modifier_ids, action)
 
 
 def process_device(device_xml: eT.Element, collection: ProfileCollection):
@@ -84,65 +152,53 @@ def process_device(device_xml: eT.Element, collection: ProfileCollection):
         return
 
     dev = profile.add_device(device_guid, device_name)
-
-    contexts = device_xml.findall("Context")
-
-    controls = process_contexts(contexts)
+    controls = process_contexts(device_xml.findall(".//Context"))
 
     for control in controls:
-        # Check if we have an existing input for the device
         existing_input = dev.get_input(
             dev.resolve_type(control.base_control), control.base_control.identifier
         )
 
-        # Update the command to prevent overwrite
         if existing_input and not control.modifiers:
-            if existing_input.command:
-                existing_input.command = f"{existing_input.command} | {control.action}"
-            else:
-                existing_input.command = f"{control.action}"
+            existing_input.command = _merge_action(existing_input.command, control.action)
             continue
 
-        # Handle modifiers being added to existing controls (where we have overlapping base)
-        if existing_input and control.modifiers:
-            existing_input.add_modifier(
-                {x.identifier for x in control.modifiers}, control.action
-            )
-        elif control.modifiers:
-            dev.add_modifier_to_input(
-                control.base_control,
-                {x.identifier for x in control.modifiers},
-                control.action,
-            )
+        if control.modifiers:
+            modifier_ids = {modifier.identifier for modifier in control.modifiers}
+            if existing_input:
+                _add_modifier_action(existing_input, modifier_ids, control.action)
+            else:
+                dev.add_modifier_to_input(
+                    control.base_control,
+                    modifier_ids,
+                    control.action,
+                )
         else:
             dev.create_input(control.base_control, control.action)
 
 
 def process_contexts(contexts: list[eT.Element]) -> list["Control"]:
     controls = []
+
     for context in contexts:
-        # context_name = context.get("ContextName")
-
-        actions = context.findall("Action")
-
-        # Multiple contexts can be linked, i.e. X- and X+ are just X
-        for action in actions:
+        for action in context.findall("Action"):
             action_name_raw = action.get("ActionName")
             if action_name_raw is None:
                 continue
 
             action_name = split_action_name(action_name_raw)
 
-            primary = action.find("Primary")
-            if primary is None:
-                continue
+            for binding_name in ("Primary", "Secondary"):
+                binding = action.find(binding_name)
+                if binding is None:
+                    continue
 
-            primary_action_keys = primary.findall("KEY")
+                action_keys = binding.findall("KEY")
+                if not action_keys:
+                    continue
 
-            if primary_action_keys:
-                control, modifiers = process_action_keys(primary_action_keys)
-
-                if control and modifiers is None:
+                control, modifiers = process_action_keys(action_keys)
+                if control is None or modifiers is None:
                     continue
 
                 controls.append(Control(action_name, control, modifiers))
@@ -154,46 +210,44 @@ def process_action_keys(keys: list[eT.Element]) -> tuple:
     if not keys:
         return (None, None)
 
-    if len(keys) == 1:
-        ctrl = parse_joystick_bind_information(keys[0].get("Information"))
-        return (ctrl, {})
-    else:
-        controls = list()
-        for key in keys:
-            controls.append(parse_joystick_bind_information(key.get("Information")))
+    controls = []
+    for key in keys:
+        parsed = parse_joystick_bind_information(key.get("Information"))
+        if parsed is None:
+            return (None, None)
+        controls.append(parsed)
 
-        if controls:
-            main_control = controls.pop(0)
-
-            return (main_control, controls)
-
-        return (None, None)
+    main_control = controls.pop(0)
+    return (main_control, controls)
 
 
 def parse_joystick_bind_information(bind_information: str | None):
-    """Process the particular bind key from information block.
-
-    The data here is inconsistent from FS2020, so proceeding cautiously"""
-    if bind_information is None:
+    """Convert FS2020 or MSFS 2024 KEY Information into a host input."""
+    if not bind_information:
         return None
-    data = bind_information.replace("Joystick", "").strip()
 
-    parts = data.split(" ")
+    data = re.sub(
+        r"^Joystick\s*", "", bind_information.strip(), count=1, flags=re.IGNORECASE
+    )
+    data = " ".join(data.split())
 
-    if len(parts) != 2:
-        print("Error with expected parts")
+    button_match = re.fullmatch(r"Button\s*(\d+)", data, re.IGNORECASE)
+    if button_match:
+        return Button(int(button_match.group(1)))
 
-    match parts[0]:
-        case "Button":
-            return Button(int(parts[1]))
-        case "Pov":
-            return Hat(1, HAT_DIR_TO_DIR[parts[1]])
-        case "L-Axis":
-            return AXIS_TO_AXIS_TYPES[data]
-        case "R-Axis":
-            return AXIS_TO_AXIS_TYPES[data]
-        case _:
-            print(f"Unexpected control type {parts[1]}")
+    pov_match = re.fullmatch(r"Pov\s*(?:(\d+)\s*)?(.+)", data, re.IGNORECASE)
+    if pov_match:
+        direction_name = re.sub(r"[\s-]+", "_", pov_match.group(2)).strip("_")
+        direction = _HAT_DIR_LOOKUP.get(direction_name.casefold())
+        if direction is not None:
+            return Hat(int(pov_match.group(1) or 1), direction)
+
+    axis = _AXIS_LOOKUP.get(data.casefold())
+    if axis is not None:
+        return axis
+
+    _logger.warning("Unsupported joystick input: %s", bind_information)
+    return None
 
 
 def split_action_name(name_key: str):
@@ -201,26 +255,36 @@ def split_action_name(name_key: str):
     return " ".join(splits).title()
 
 
-def file_check(file):
-    import os
+def file_check(file: Path) -> bool:
+    try:
+        with file.open("rb") as source:
+            sample = source.read(256)
+    except OSError as exc:
+        _logger.warning("Unable to read candidate profile %s: %s", file, exc)
+        return False
 
-    _logger.debug(f"File access: {os.stat(file).st_mode}")
-    with open(file, "rb") as b:
-        _logger.debug("File opened")
-        if b.read(5) == b"<?xml":
-            return True
-    return False
+    sample = sample.removeprefix(b"\xef\xbb\xbf").lstrip()
+    return sample.startswith(b"<")
 
 
 def check_folders(folders):
     valid_files = []
-    for folder in folders:
-        if not folder.is_dir():
+
+    for entry in sorted(folders, key=lambda path: str(path).casefold()):
+        if entry.is_file():
+            if entry.suffix.lower() == ".xml" and file_check(entry):
+                valid_files.append(entry)
             continue
 
-        for file in folder.iterdir():
-            _logger.debug(f"Processing file {file}")
-            valid_files.append(file) if file_check(file) else None
+        if not entry.is_dir():
+            continue
+
+        for file in sorted(entry.rglob("*"), key=lambda path: str(path).casefold()):
+            if not file.is_file() or file.suffix.lower() != ".xml":
+                continue
+            _logger.debug("Processing file %s", file)
+            if file_check(file):
+                valid_files.append(file)
 
     return valid_files
 
@@ -228,8 +292,8 @@ def check_folders(folders):
 @dataclass
 class Control:
     action: str
-    base_control: Button | Axis | Hat
-    modifiers: list[Button | Axis | Hat]
+    base_control: Button | Axis | AxisSlider | Hat
+    modifiers: list[Button | Axis | AxisSlider | Hat]
 
     def __repr__(self):
         return f"{self.action} | {self.base_control} | {id(self.base_control)}"
